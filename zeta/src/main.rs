@@ -1,10 +1,12 @@
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::collections::HashMap;
 
 use anyhow::Result;
-use git2::Repository;
 use log::debug;
-use serde::{Deserialize, Serialize};
-use url::Url;
+use tree_sitter::QueryCursor;
+use zeta::{
+    analyze,
+    extensions::{ExtensionMetadata, ExtensionType},
+};
 
 include!(concat!(env!("OUT_DIR"), "/schemas.rs"));
 
@@ -12,243 +14,105 @@ fn main() -> Result<()> {
     env_logger::init();
     debug!("logger initialized");
 
-    let mut combined_extensions: Vec<Extension> = Vec::new();
+    let extensions = analyze::collect_external_extensions()?;
 
-    let zed_extensions_dir = user_dirs::cache_dir()?.join("ts-ecosystem-zeta");
+    let mut total_extensions = 0;
+    let mut toml_manifest_extensions = 0;
+    let mut json_manifest_extensions = 0;
+    let mut by_git_provider: HashMap<String, usize> = HashMap::new();
+    let mut theme_extensions = 0;
+    let mut language_extensions = 0;
+    let mut unknown_extensions = 0;
+    let mut supported_captures_by_theme: HashMap<String, Vec<String>> = HashMap::new();
+    let mut captures_by_language: HashMap<String, Vec<String>> = HashMap::new();
 
-    let zed_extensions_repository = Repository::open(&zed_extensions_dir).unwrap_or_else(|_| {
-        Repository::clone(
-            "https://github.com/zed-industries/extensions.git",
-            &zed_extensions_dir,
-        )
-        .unwrap()
-    });
-    debug!("cloned zed extensions repository to {zed_extensions_dir:?}");
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_query::LANGUAGE.into())
+        .expect("Error loading Query grammar");
 
-    let zed_extensions_metadata: ExtensionsMetadata = toml::from_str(&fs::read_to_string(
-        zed_extensions_dir.join("extensions.toml"),
-    )?)?;
+    let query = tree_sitter::Query::new(
+        &tree_sitter_query::LANGUAGE.into(),
+        "(capture (identifier) @name) ",
+    )
+    .expect("tree-sitter-query capture query should build");
 
-    for (id, extension) in zed_extensions_metadata.0.iter() {
-        let mut submodule = zed_extensions_repository
-            .find_submodule(&extension.submodule)
-            .expect("submodule for extension should exist");
-        submodule.update(true, None)?;
-        debug!("cloned extension submodule '{}'", &id);
-        let extension_path = zed_extensions_dir
-            .join(&extension.submodule)
-            .join(&extension.path.clone().unwrap_or(String::new()));
+    for extension in extensions {
+        total_extensions += 1;
 
-        let url = Url::parse(
-            &submodule
-                .url()
-                .expect("extension submodule should have valid url"),
-        )?;
+        match extension.metadata {
+            ExtensionMetadata::TomlManifest(_) => toml_manifest_extensions += 1,
+            ExtensionMetadata::JsonManifest(_) => json_manifest_extensions += 1,
+        }
 
-        let metadata: ExtensionMetadata = match (
-            extension_path.join("extension.toml"),
-            extension_path.join("extension.json"),
-        ) {
-            (toml_path, _) if toml_path.exists() => ExtensionMetadata::TomlManifest(
-                toml::from_str::<TomlManifest>(&fs::read_to_string(toml_path)?)?,
-            ),
-            (_, json_path) if json_path.exists() => ExtensionMetadata::JsonManifest(
-                serde_json::from_str::<JsonManifest>(&fs::read_to_string(json_path)?)?,
-            ),
-            _ => panic!("Extension manifest not found"),
-        };
+        if !extension.builtin {
+            *by_git_provider
+                .entry(extension.git_provider.unwrap().clone())
+                .or_default() += 1;
+        }
 
-        let _type = match (
-            extension_path.join("languages"),
-            extension_path.join("themes"),
-        ) {
-            (lang_path, _) if lang_path.exists() => {
-                ExtensionType::Language(LanguageExtension::from_scan(&lang_path)?)
+        match extension.r#type {
+            ExtensionType::Theme(theme_extension) => {
+                theme_extensions += 1;
+                let mut syntax_captures: Vec<String> = theme_extension
+                    .themes
+                    .iter()
+                    .filter_map(|theme| {
+                        theme.as_ref().map(|theme| {
+                            theme
+                                .themes
+                                .iter()
+                                .flat_map(|t| t.style.syntax.keys())
+                                .collect::<Vec<&String>>()
+                        })
+                    })
+                    .flatten()
+                    .cloned()
+                    .collect();
+
+                syntax_captures.sort_unstable();
+                syntax_captures.dedup();
+
+                supported_captures_by_theme.insert(extension.id, syntax_captures);
             }
-            (_, theme_path) if theme_path.exists() => {
-                ExtensionType::Theme(ThemeExtension::from_scan(&theme_path)?)
-            }
-            _ => ExtensionType::Unknown,
-        };
+            ExtensionType::Language(language_extension) => {
+                language_extensions += 1;
+                let captures: Vec<String> = language_extension
+                    .languages
+                    .iter()
+                    .filter_map(|language| match &language.highlights_queries {
+                        Some(highlights) => {
+                            let tree = parser.parse(highlights, None).unwrap();
+                            let mut cursor = QueryCursor::new();
+                            let captures =
+                                cursor.captures(&query, tree.root_node(), highlights.as_bytes());
 
-        combined_extensions.push(Extension {
-            metadata,
-            builtin: false,
-            git_provider: Some(url.host_str().unwrap().to_string()),
-            r#type: _type,
-        })
+                            Some(vec![])
+                        }
+                        None => None,
+                    })
+                    .flatten()
+                    .collect();
+
+                captures_by_language.insert(extension.id, captures);
+            }
+            ExtensionType::Unknown => {
+                unknown_extensions += 1;
+            }
+        }
     }
 
-    println!("{}", serde_json::to_string_pretty(&combined_extensions)?);
+    println!("Total Extensions: {total_extensions}");
+    println!(
+        "\tWith TOML Manifest: {toml_manifest_extensions}\n\tWith JSON Manifest: {json_manifest_extensions}"
+    );
+    println!(
+        "By Extension Type:\n\tTheme: {theme_extensions}\n\tLanguage: {language_extensions}\n\tUnknown: {unknown_extensions}"
+    );
+    println!("By Git Provider:");
+    for (provider, count) in &by_git_provider {
+        println!("\t{provider}: {count}");
+    }
 
     Ok(())
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExtensionsMetadata(HashMap<String, ExtensionsMetadataEntry>);
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExtensionsMetadataEntry {
-    submodule: String,
-    path: Option<String>,
-    version: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Extension {
-    pub metadata: ExtensionMetadata,
-    pub builtin: bool,
-    pub git_provider: Option<String>,
-    pub r#type: ExtensionType,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ExtensionType {
-    Theme(ThemeExtension),
-    Language(LanguageExtension),
-    Unknown,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ExtensionMetadata {
-    TomlManifest(TomlManifest),
-    JsonManifest(JsonManifest),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TomlManifest {
-    pub id: Option<String>,
-    pub name: String,
-    pub description: Option<String>,
-    pub version: String,
-    pub schema_version: Option<usize>,
-    pub authors: Vec<String>,
-    pub repository: String,
-    pub grammars: Option<HashMap<String, ExtensionGrammars>>,
-    pub language_servers: Option<HashMap<String, ExtensionLanguageServers>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JsonManifest {
-    pub name: String,
-    pub description: Option<String>,
-    pub version: String,
-    pub authors: Vec<String>,
-    pub repository: String,
-    pub themes: Option<HashMap<String, String>>,
-    pub languages: Option<HashMap<String, String>>,
-    pub grammars: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExtensionGrammars {
-    pub repository: String,
-    pub commit: Option<String>,
-    pub rev: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExtensionLanguageServers {
-    pub name: Option<String>,
-    pub language: Option<String>,
-    pub languages: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ThemeExtension {
-    pub themes: Vec<Option<ThemeFamilyContent>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LanguageExtension {
-    pub languages: Vec<Language>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Language {
-    pub config: LanguageConfig,
-    pub highlights_queries: Option<String>,
-    pub injections_queries: Option<String>,
-    pub folds_queries: Option<String>,
-    pub outline_queries: Option<String>,
-    pub brackets_queries: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LanguageConfig {
-    name: String,
-    grammar: String,
-    path_suffixes: Option<Vec<String>>,
-    line_comments: Option<Vec<String>>,
-    tab_size: Option<usize>,
-    hard_tabs: Option<bool>,
-    first_line_pattern: Option<String>,
-}
-
-impl LanguageExtension {
-    // Handle `grammars/<lang>.toml` (e.g. assembly extention).
-    pub fn from_scan(languages_dir: &PathBuf) -> Result<Self> {
-        let mut languages: Vec<Language> = Vec::new();
-
-        for entry in fs::read_dir(languages_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                let mut config: Option<LanguageConfig> = None;
-                let mut highlights_queries = None;
-                let mut injections_queries = None;
-                let mut folds_queries = None;
-                let mut outline_queries = None;
-                let mut brackets_queries = None;
-
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let path = entry.path();
-                    let file_name = entry.file_name();
-                    let name = file_name.to_str().unwrap();
-
-                    if path.is_file() {
-                        match name {
-                            "config.toml" => config = toml::from_str(&fs::read_to_string(path)?)?,
-                            "highlights.scm" => highlights_queries = fs::read_to_string(path).ok(),
-                            "injections.scm" => injections_queries = fs::read_to_string(path).ok(),
-                            "folds.scm" => folds_queries = fs::read_to_string(path).ok(),
-                            "outline.scm" => outline_queries = fs::read_to_string(path).ok(),
-                            "brackets.scm" => brackets_queries = fs::read_to_string(path).ok(),
-                            _ => {}
-                        }
-                    }
-                }
-
-                languages.push(Language {
-                    config: config.expect("language configuration should exist"),
-                    highlights_queries,
-                    injections_queries,
-                    folds_queries,
-                    outline_queries,
-                    brackets_queries,
-                })
-            }
-        }
-
-        Ok(Self { languages })
-    }
-}
-
-impl ThemeExtension {
-    pub fn from_scan(themes_dir: &PathBuf) -> Result<Self> {
-        let mut themes: Vec<Option<ThemeFamilyContent>> = Vec::new();
-
-        for entry in fs::read_dir(themes_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() && path.extension().is_some_and(|e| e == "json") {
-                themes.push(serde_json::from_str(&fs::read_to_string(path)?).ok());
-            }
-        }
-
-        Ok(ThemeExtension { themes })
-    }
 }
