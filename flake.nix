@@ -45,6 +45,7 @@
           env = {
             OPENSSL_NO_VENDOR = 1;
             RUST_SRC_PATH = toString pkgs.rustPlatform.rustLibSrc;
+            # RUST_LOG = "debug";
           };
         };
       }
