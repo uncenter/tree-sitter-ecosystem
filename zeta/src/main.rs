@@ -61,19 +61,14 @@ fn main() -> Result<()> {
 
     let cache_dir = user_dirs::cache_dir()?.join("ts-ecosystem-zeta");
     let extensions_scan_cache = cache_dir.join("extensions-scan-dump.json");
+    let extensions_scan_clone = cache_dir.join("extensions-clone");
 
     let (extensions, cache_hit): (Vec<Extension>, bool) = if args.refresh {
-        (
-            scan::scan_extensions(cache_dir.join("extensions-clone"))?,
-            false,
-        )
+        (scan::extensions(&extensions_scan_clone)?, false)
     } else {
         match fs::read_to_string(&extensions_scan_cache) {
             Ok(contents) => (serde_json::from_str(&contents)?, true),
-            Err(_) => (
-                scan::scan_extensions(cache_dir.join("extensions-clone"))?,
-                false,
-            ),
+            Err(_) => (scan::extensions(&extensions_scan_clone)?, false),
         }
     };
 
@@ -220,7 +215,7 @@ fn main() -> Result<()> {
                 Queries::LeastCommonlyUsedCaptures => todo!(),
                 Queries::MostSupportedCaptures => todo!(),
                 Queries::LeastSupportedCaptures => todo!(),
-                Queries::CapturesSupportByTheme { theme } => todo!(),
+                Queries::CapturesSupportByTheme { theme: _ } => todo!(),
                 Queries::MostSupportedLanguages => todo!(),
                 Queries::LeastSupportedLanguages => todo!(),
                 Queries::ThemesWithMostSupport => todo!(),

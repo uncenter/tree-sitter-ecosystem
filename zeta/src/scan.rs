@@ -11,17 +11,17 @@ use crate::extensions::{
 };
 
 pub fn clone_extensions_repository(dir: &PathBuf) -> Result<Repository> {
-    let zed_extensions_repository = match Repository::open(&dir) {
+    let zed_extensions_repository = match Repository::open(dir) {
         Ok(repo) => repo,
-        Err(_) => Repository::clone("https://github.com/zed-industries/extensions.git", &dir)?,
+        Err(_) => Repository::clone("https://github.com/zed-industries/extensions.git", dir)?,
     };
     debug!("cloned zed extensions repository to {dir:?}");
 
     Ok(zed_extensions_repository)
 }
 
-pub fn scan_extensions(extensions_dir: PathBuf) -> Result<Vec<Extension>> {
-    let extensions_repository = clone_extensions_repository(&extensions_dir)?;
+pub fn extensions(extensions_dir: &PathBuf) -> Result<Vec<Extension>> {
+    let extensions_repository = clone_extensions_repository(extensions_dir)?;
 
     let extensions_metadata: ExtensionsMetadata =
         toml::from_str(&fs::read_to_string(extensions_dir.join("extensions.toml"))?)?;
@@ -57,7 +57,7 @@ pub fn scan_extensions(extensions_dir: PathBuf) -> Result<Vec<Extension>> {
             _ => panic!("Extension manifest not found"),
         };
 
-        let _type = match (
+        let r#type = match (
             extension_path.join("languages"),
             extension_path.join("themes"),
         ) {
@@ -75,7 +75,7 @@ pub fn scan_extensions(extensions_dir: PathBuf) -> Result<Vec<Extension>> {
             metadata,
             builtin: false,
             git_provider: Some(url.host_str().unwrap().to_string()),
-            r#type: _type,
+            r#type,
         });
     }
 
