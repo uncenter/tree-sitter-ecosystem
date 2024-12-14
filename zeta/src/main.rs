@@ -41,12 +41,16 @@ pub enum Comparisons {
 
 #[derive(Subcommand)]
 pub enum Queries {
-    ThemesSupportingCapture { capture: String },
     MostCommonlyUsedCaptures,
     LeastCommonlyUsedCaptures,
     MostSupportedCaptures,
     LeastSupportedCaptures,
-    LanguageCapturesSupportByTheme { theme: String },
+    MostSupportedLanguages,
+    LeastSupportedLanguages,
+    CapturesSupportByTheme { theme: String },
+    ThemesSupportingCapture { capture: String },
+    ThemesWithMostSupport,
+    ThemesWithLeastSupport,
 }
 
 fn main() -> Result<()> {
@@ -216,7 +220,11 @@ fn main() -> Result<()> {
                 Queries::LeastCommonlyUsedCaptures => todo!(),
                 Queries::MostSupportedCaptures => todo!(),
                 Queries::LeastSupportedCaptures => todo!(),
-                Queries::LanguageCapturesSupportByTheme { theme } => todo!(),
+                Queries::CapturesSupportByTheme { theme } => todo!(),
+                Queries::MostSupportedLanguages => todo!(),
+                Queries::LeastSupportedLanguages => todo!(),
+                Queries::ThemesWithMostSupport => todo!(),
+                Queries::ThemesWithLeastSupport => todo!(),
             };
         }
     }
