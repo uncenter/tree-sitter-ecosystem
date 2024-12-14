@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use anyhow::Result;
 use git2::Repository;
@@ -10,30 +10,31 @@ use crate::extensions::{
     LanguageExtension, ThemeExtension, TomlManifest,
 };
 
-pub fn collect_external_extensions() -> Result<Vec<Extension>> {
+pub fn clone_extensions_repository(dir: &PathBuf) -> Result<Repository> {
+    let zed_extensions_repository = match Repository::open(&dir) {
+        Ok(repo) => repo,
+        Err(_) => Repository::clone("https://github.com/zed-industries/extensions.git", &dir)?,
+    };
+    debug!("cloned zed extensions repository to {dir:?}");
+
+    Ok(zed_extensions_repository)
+}
+
+pub fn scan_extensions(extensions_dir: PathBuf) -> Result<Vec<Extension>> {
+    let extensions_repository = clone_extensions_repository(&extensions_dir)?;
+
+    let extensions_metadata: ExtensionsMetadata =
+        toml::from_str(&fs::read_to_string(extensions_dir.join("extensions.toml"))?)?;
+
     let mut extensions: Vec<Extension> = Vec::new();
 
-    let zed_extensions_dir = user_dirs::cache_dir()?.join("ts-ecosystem-zeta");
-    let zed_extensions_repository = Repository::open(&zed_extensions_dir).unwrap_or_else(|_| {
-        Repository::clone(
-            "https://github.com/zed-industries/extensions.git",
-            &zed_extensions_dir,
-        )
-        .unwrap()
-    });
-    debug!("cloned zed extensions repository to {zed_extensions_dir:?}");
-
-    let zed_extensions_metadata: ExtensionsMetadata = toml::from_str(&fs::read_to_string(
-        zed_extensions_dir.join("extensions.toml"),
-    )?)?;
-
-    for (id, extension) in &zed_extensions_metadata.0 {
-        let mut submodule = zed_extensions_repository
+    for (id, extension) in &extensions_metadata.0 {
+        let mut submodule = extensions_repository
             .find_submodule(&extension.submodule)
             .expect("submodule for extension should exist");
         submodule.update(true, None)?;
         debug!("cloned extension submodule '{}'", &id);
-        let extension_path = zed_extensions_dir
+        let extension_path = extensions_dir
             .join(&extension.submodule)
             .join(extension.path.clone().unwrap_or(String::new()));
 

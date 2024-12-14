@@ -3,3 +3,4 @@
     - [ ] "how many themes support @<capture>?"
     - [ ] "what are the most/least commonly used captures?"
     - [ ] "what are the most/least supported captures?"
+- [ ] Scan for slash command, context server extensions

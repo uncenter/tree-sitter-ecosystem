@@ -1,2 +1,2 @@
-pub mod analyze;
 pub mod extensions;
+pub mod scan;
