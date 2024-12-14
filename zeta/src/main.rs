@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use log::debug;
+use streaming_iterator::StreamingIterator;
 use tree_sitter::QueryCursor;
 use zeta::{
     analyze,
@@ -83,11 +84,19 @@ fn main() -> Result<()> {
                     .filter_map(|language| match &language.highlights_queries {
                         Some(highlights) => {
                             let tree = parser.parse(highlights, None).unwrap();
+                            let text = highlights.as_bytes();
                             let mut cursor = QueryCursor::new();
-                            let captures =
-                                cursor.captures(&query, tree.root_node(), highlights.as_bytes());
+                            let mut captures = cursor.captures(&query, tree.root_node(), text);
 
-                            Some(vec![])
+                            let mut capture_names: Vec<String> = Vec::new();
+                            while let Some((c, _)) = captures.next() {
+                                for capture in c.captures {
+                                    capture_names
+                                        .push(capture.node.utf8_text(text).unwrap().to_string());
+                                }
+                            }
+
+                            Some(capture_names)
                         }
                         None => None,
                     })
@@ -112,6 +121,29 @@ fn main() -> Result<()> {
     println!("By Git Provider:");
     for (provider, count) in &by_git_provider {
         println!("\t{provider}: {count}");
+    }
+
+    println!("Languages by Theme-Supported Captures");
+    for (lang, captures) in &captures_by_language {
+        println!("\t{lang}: (<capture> only supported by <count> themes)");
+        let mut captures_by_theme_support: Vec<_> = captures
+            .iter()
+            .filter(|capture| !capture.starts_with('_'))
+            .map(|capture| {
+                (
+                    capture,
+                    supported_captures_by_theme
+                        .iter()
+                        .filter(|(_, supported_captures)| supported_captures.contains(capture))
+                        .count(),
+                )
+            })
+            .collect();
+        captures_by_theme_support.sort_by_key(|x| x.1);
+        captures_by_theme_support.truncate(10);
+        for (capture, count) in captures_by_theme_support {
+            println!("\t\t{capture}: {count} ({}%)", count / theme_extensions);
+        }
     }
 
     Ok(())

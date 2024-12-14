@@ -3,7 +3,10 @@ use std::{collections::HashMap, fs, path::PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-include!(concat!(env!("OUT_DIR"), "/schemas.rs"));
+pub mod generated {
+    #![allow(clippy::all)]
+    include!(concat!(env!("OUT_DIR"), "/schemas.rs"));
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExtensionsMetadata(pub HashMap<String, ExtensionsMetadataEntry>);
@@ -78,7 +81,7 @@ pub struct ExtensionLanguageServers {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ThemeExtension {
-    pub themes: Vec<Option<ThemeFamilyContent>>,
+    pub themes: Vec<Option<generated::ThemeFamilyContent>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -160,7 +163,7 @@ impl LanguageExtension {
 
 impl ThemeExtension {
     pub fn from_scan(themes_dir: &PathBuf) -> Result<Self> {
-        let mut themes: Vec<Option<ThemeFamilyContent>> = Vec::new();
+        let mut themes: Vec<Option<generated::ThemeFamilyContent>> = Vec::new();
 
         for entry in fs::read_dir(themes_dir)? {
             let entry = entry?;
