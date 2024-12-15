@@ -28,9 +28,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    Compare {
-        comparison: Comparisons,
-    },
+    /// Compare counts of extensions by basic properties like type, manifest format, Git provider, and theme schema.
+    Compare { comparison: Comparisons },
+    /// Query capture-related statistics, and theme/language relationships in terms of captures.
     Query {
         #[command(subcommand)]
         query: Queries,
@@ -39,9 +39,13 @@ pub enum Commands {
 
 #[derive(Clone, ValueEnum)]
 pub enum Comparisons {
+    /// Compare counts of extensions by type (theme or language).
     ByType,
+    /// Compare counts of extensions by manifest format (TOML or JSON).
     ByManifest,
+    /// Compare counts of extensions by Git provider (e.g. GitHub, GitLab).
     ByGitProvider,
+    /// Compare counts of theme extensions by theme schema: V1, V2, or Invalid (no theme schema / unknown).
     ByThemeSchema,
 }
 
@@ -55,12 +59,14 @@ pub enum SortOrder {
 
 #[derive(Subcommand)]
 pub enum Queries {
+    /// Query the most (order: desc) or least (order: asc) used captures in language extensions.
     CapturesByUsage {
         order: SortOrder,
 
         #[arg(short, long, default_value = "10")]
         limit: usize,
     },
+    /// Query the most (order: desc) or least (order: asc) supported captures in theme extensions.
     CapturesByThemeSupport {
         order: SortOrder,
 
@@ -68,12 +74,14 @@ pub enum Queries {
         limit: usize,
     },
 
+    /// Query the themes supporting a specific capture.
     ThemesSupportingCapture {
         capture: String,
 
         #[arg(long)]
         count: bool,
     },
+    /// Query the languages using a specific capture.
     LanguagesUsingCapture {
         capture: String,
 
@@ -81,12 +89,16 @@ pub enum Queries {
         count: bool,
     },
 
+    /// Roughly score and rank languages by the depth (average number of themes supporting each capture used in a language) and breadth (number of themes supporting at least one capture) of theme support.
+    /// The score is calculated as 7 * depth / number of captures + 3 * breadth.
+    /// The best languages will have a high score (order: desc) and the worst languages will have a low score (order: asc).
     LanguagesByThemeSupport {
         order: SortOrder,
 
         #[arg(short, long, default_value = "10")]
         limit: usize,
     },
+    /// Query the themes supporting the most (order: desc) or least (order: asc) *USED* captures. Captures are considered used if they are used in any language extension.
     ThemesByCaptureSupport {
         order: SortOrder,
 
@@ -334,7 +346,7 @@ fn main() -> Result<()> {
                     let mut language_support_scores: HashMap<String, usize> = HashMap::new();
 
                     for (language, captures) in &captures_by_language {
-                        //  verage number of themes supporting each capture.
+                        // Average number of themes supporting each capture.
                         let capture_support_depth: usize = captures
                             .iter()
                             .map(|capture| {
