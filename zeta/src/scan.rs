@@ -5,7 +5,7 @@ use git2::Repository;
 use log::debug;
 use url::Url;
 
-use crate::extensions::{
+use crate::types::{
     Extension, ExtensionMetadata, ExtensionType, ExtensionsMetadata, JsonManifest,
     LanguageExtension, ThemeExtension, TomlManifest,
 };
@@ -15,7 +15,7 @@ pub fn clone_extensions_repository(dir: &PathBuf) -> Result<Repository> {
         Ok(repo) => repo,
         Err(_) => Repository::clone("https://github.com/zed-industries/extensions.git", dir)?,
     };
-    debug!("cloned zed extensions repository to {dir:?}");
+    debug!("opened zed extensions repository in {dir:?}");
 
     Ok(zed_extensions_repository)
 }
@@ -52,7 +52,7 @@ pub fn extensions(extensions_dir: &PathBuf) -> Result<Vec<Extension>> {
                 toml::from_str::<TomlManifest>(&fs::read_to_string(toml_path)?)?,
             ),
             (_, json_path) if json_path.exists() => ExtensionMetadata::JsonManifest(
-                serde_json::from_str::<JsonManifest>(&fs::read_to_string(json_path)?)?,
+                serde_json_lenient::from_str::<JsonManifest>(&fs::read_to_string(json_path)?)?,
             ),
             _ => panic!("Extension manifest not found"),
         };

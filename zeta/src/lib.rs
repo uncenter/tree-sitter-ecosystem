@@ -1,2 +1,2 @@
-pub mod extensions;
 pub mod scan;
+pub mod types;

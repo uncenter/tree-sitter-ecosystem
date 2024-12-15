@@ -1,11 +1,17 @@
 use std::{collections::HashMap, fs, path::PathBuf};
 
 use anyhow::Result;
+use log::warn;
 use serde::{Deserialize, Serialize};
 
-pub mod generated {
-    #![allow(clippy::all)]
-    include!(concat!(env!("OUT_DIR"), "/schemas.rs"));
+#[allow(clippy::all)]
+pub mod themes_v1_schema {
+    include!(concat!(env!("OUT_DIR"), "/themes-v1.rs"));
+}
+
+#[allow(clippy::all)]
+pub mod themes_v2_schema {
+    include!(concat!(env!("OUT_DIR"), "/themes-v2.rs"));
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,7 +87,20 @@ pub struct ExtensionLanguageServers {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ThemeExtension {
-    pub themes: Vec<Option<generated::ThemeFamilyContent>>,
+    pub themes: Vec<Theme>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Theme {
+    V1(Option<themes_v1_schema::ThemeFamilyContent>),
+    V2(Option<themes_v2_schema::ThemeFamilyContent>),
+    Invalid,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JsonSchema {
+    #[serde(rename = "$schema")]
+    pub schema: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -163,14 +182,57 @@ impl LanguageExtension {
 
 impl ThemeExtension {
     pub fn from_scan(themes_dir: &PathBuf) -> Result<Self> {
-        let mut themes: Vec<Option<generated::ThemeFamilyContent>> = Vec::new();
+        let mut themes: Vec<Theme> = Vec::new();
 
         for entry in fs::read_dir(themes_dir)? {
             let entry = entry?;
             let path = entry.path();
 
             if path.is_file() && path.extension().is_some_and(|e| e == "json") {
-                themes.push(serde_json::from_str(&fs::read_to_string(path)?).ok());
+                let contents = fs::read_to_string(&path)?;
+                let json = serde_json_lenient::from_str::<JsonSchema>(&contents).ok();
+
+                let theme_family_content = match json {
+                    Some(json)
+                        if json.schema.as_str() == "https://zed.dev/schema/themes/v0.1.0.json" =>
+                    {
+                        Theme::V1(
+                            serde_json_lenient::from_str::<themes_v1_schema::ThemeFamilyContent>(
+                                &contents,
+                            )
+                            .map_err(|e| {
+                                warn!("Error parsing v1 theme: {}", e);
+                            })
+                            .ok(),
+                        )
+                    }
+                    Some(json)
+                        if json.schema.as_str() == "https://zed.dev/schema/themes/v0.2.0.json" =>
+                    {
+                        Theme::V2(
+                            serde_json_lenient::from_str::<themes_v2_schema::ThemeFamilyContent>(
+                                &contents,
+                            )
+                            .map_err(|e| {
+                                warn!("Error parsing v2 theme: {}", e);
+                            })
+                            .ok(),
+                        )
+                    }
+                    _ => match serde_json_lenient::from_str(&contents) {
+                        Ok(v1) => Theme::V1(Some(v1)),
+                        Err(_) => {
+                            if let Ok(v2) = serde_json_lenient::from_str(&contents) {
+                                Theme::V2(Some(v2))
+                            } else {
+                                warn!("Error parsing theme: {}", path.to_string_lossy());
+                                Theme::Invalid
+                            }
+                        }
+                    },
+                };
+
+                themes.push(theme_family_content);
             }
         }
 
