@@ -284,11 +284,11 @@ fn handle_query(query: AnalysisQuery, extensions: Vec<Extension>) {
     let mut ts_parser = tree_sitter::Parser::new();
     ts_parser
         .set_language(&tree_sitter_query::LANGUAGE.into())
-        .expect("Error loading Query grammar");
+        .expect("should load tree-sitter-query grammar");
 
     let ts_query = tree_sitter::Query::new(
         &tree_sitter_query::LANGUAGE.into(),
-        "(capture (identifier) @name) ",
+        "(capture (identifier) @name)",
     )
     .expect("tree-sitter-query capture query should build");
 
