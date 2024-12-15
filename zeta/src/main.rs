@@ -251,26 +251,12 @@ fn main() -> Result<()> {
                         let captures: Vec<String> = language_extension
                             .languages
                             .iter()
-                            .filter_map(|language| match &language.highlights_queries {
-                                Some(highlights) => {
-                                    let tree = ts_parser.parse(highlights, None).unwrap();
-                                    let text = highlights.as_bytes();
-                                    let mut cursor = QueryCursor::new();
-                                    let mut captures =
-                                        cursor.captures(&ts_query, tree.root_node(), text);
-
-                                    let mut capture_names: Vec<String> = Vec::new();
-                                    while let Some((c, _)) = captures.next() {
-                                        for capture in c.captures {
-                                            capture_names.push(
-                                                capture.node.utf8_text(text).unwrap().to_string(),
-                                            );
-                                        }
-                                    }
-
-                                    Some(capture_names)
+                            .filter_map(|language| {
+                                if let Some(highlights) = &language.highlights_queries {
+                                    extract_capture_names(highlights, &mut ts_parser, &ts_query)
+                                } else {
+                                    None
                                 }
-                                None => None,
                             })
                             .flatten()
                             .filter(|capture| !capture.starts_with('_'))
@@ -285,40 +271,22 @@ fn main() -> Result<()> {
             match query {
                 Queries::CapturesByUsage { order, limit } => {
                     let mut capture_counts: HashMap<String, usize> = HashMap::new();
-                    for capture in captures_by_language
-                        .values()
-                        .flat_map(|captures| {
-                            // Remove duplicates *per language*, not across all languages - we want to count each capture once per language.
+                    let captures_by_language: Vec<String> = captures_by_language
+                        .into_values()
+                        .flat_map(|mut values| {
                             let mut seen = HashSet::new();
-                            captures
-                                .iter()
+                            values
+                                .drain(..)
                                 .filter(|item| seen.insert(item.clone()))
-                                .collect::<Vec<_>>()
+                                .collect::<Vec<String>>()
                         })
-                        .cloned()
-                        .collect::<Vec<_>>()
-                    {
+                        .collect();
+
+                    for capture in captures_by_language {
                         *capture_counts.entry(capture).or_default() += 1;
                     }
 
-                    let mut sorted_captures: Vec<(&String, &usize)> =
-                        capture_counts.iter().collect();
-                    match order {
-                        SortOrder::Asc | SortOrder::Ascending => {
-                            sorted_captures.sort_unstable_by(|a, b| a.1.cmp(b.1));
-                        }
-                        SortOrder::Desc | SortOrder::Descending => {
-                            sorted_captures.sort_unstable_by(|a, b| b.1.cmp(a.1));
-                        }
-                    }
-
-                    if limit != 0 {
-                        sorted_captures.truncate(limit);
-                    }
-
-                    for (capture, count) in sorted_captures {
-                        println!("{capture}: {count}");
-                    }
+                    sort_truncate_display_hashmap(&capture_counts, &order, limit);
                 }
                 Queries::CapturesByThemeSupport { order, limit } => {
                     let mut capture_counts: HashMap<String, usize> = HashMap::new();
@@ -328,26 +296,7 @@ fn main() -> Result<()> {
                         }
                     }
 
-                    // display_map_sorted_truncated(capture_counts, order, limit);
-                    let mut sorted_captures: Vec<(&String, &usize)> =
-                        capture_counts.iter().collect();
-
-                    match order {
-                        SortOrder::Asc | SortOrder::Ascending => {
-                            sorted_captures.sort_unstable_by(|a, b| a.1.cmp(b.1));
-                        }
-                        SortOrder::Desc | SortOrder::Descending => {
-                            sorted_captures.sort_unstable_by(|a, b| b.1.cmp(a.1));
-                        }
-                    }
-
-                    if limit != 0 {
-                        sorted_captures.truncate(limit);
-                    }
-
-                    for (capture, count) in sorted_captures {
-                        println!("{capture}: {count}");
-                    }
+                    sort_truncate_display_hashmap(&capture_counts, &order, limit);
                 }
 
                 Queries::ThemesSupportingCapture { capture, count } => {
@@ -382,41 +331,43 @@ fn main() -> Result<()> {
                 }
 
                 Queries::LanguagesByThemeSupport { order, limit } => {
-                    let mut language_support_scores: HashMap<String, f64> = HashMap::new();
+                    let mut language_support_scores: HashMap<String, usize> = HashMap::new();
+
                     for (language, captures) in &captures_by_language {
-                        let mut support_score = f64::from(0);
-                        for capture in captures {
-                            support_score += supported_captures_by_theme
-                                .values()
-                                .filter(|themes| themes.contains(capture))
-                                .count() as f64;
-                        }
-                        support_score /= captures.len() as f64;
+                        //  verage number of themes supporting each capture.
+                        let capture_support_depth: usize = captures
+                            .iter()
+                            .map(|capture| {
+                                supported_captures_by_theme
+                                    .values()
+                                    .filter(|captures| captures.contains(capture))
+                                    .count()
+                            })
+                            .sum();
+
+                        // Count of themes supporting at least one capture.
+                        let theme_support_breadth = supported_captures_by_theme
+                            .values()
+                            .filter(|supported_captures| {
+                                supported_captures
+                                    .iter()
+                                    .any(|capture| captures.contains(capture))
+                            })
+                            .count();
+
+                        let scaled_capture_support_depth =
+                            7 * capture_support_depth / captures.len();
+                        let scaled_theme_support_breadth = 3 * theme_support_breadth;
+
+                        let support_score =
+                            scaled_capture_support_depth + scaled_theme_support_breadth;
 
                         language_support_scores.insert(language.clone(), support_score);
                     }
 
-                    // display_map_sorted_truncated(language_support_scores, order, limit);
-                    let mut sorted_languages: Vec<(&String, &f64)> =
-                        language_support_scores.iter().collect();
-
-                    match order {
-                        SortOrder::Asc | SortOrder::Ascending => {
-                            sorted_languages.sort_unstable_by(|a, b| a.1.partial_cmp(b.1).unwrap());
-                        }
-                        SortOrder::Desc | SortOrder::Descending => {
-                            sorted_languages.sort_unstable_by(|a, b| b.1.partial_cmp(a.1).unwrap());
-                        }
-                    }
-
-                    if limit != 0 {
-                        sorted_languages.truncate(limit);
-                    }
-
-                    for (language, score) in sorted_languages {
-                        println!("{language}: {score}");
-                    }
+                    sort_truncate_display_hashmap(&language_support_scores, &order, limit);
                 }
+
                 Queries::ThemesByCaptureSupport { order, limit } => {
                     let used_captures: HashSet<String> =
                         captures_by_language.values().flatten().cloned().collect();
@@ -469,4 +420,45 @@ fn count_or_list<T: ToString>(iter: impl Iterator<Item = T>, count: bool) -> Str
             .collect::<Vec<String>>()
             .join("\n")
     }
+}
+
+fn sort_truncate_display_hashmap(map: &HashMap<String, usize>, order: &SortOrder, limit: usize) {
+    let mut sorted_map: Vec<(&String, &usize)> = map.iter().collect();
+
+    match order {
+        SortOrder::Asc | SortOrder::Ascending => {
+            sorted_map.sort_unstable_by(|a, b| a.1.cmp(b.1));
+        }
+        SortOrder::Desc | SortOrder::Descending => {
+            sorted_map.sort_unstable_by(|a, b| b.1.cmp(a.1));
+        }
+    }
+
+    if limit != 0 {
+        sorted_map.truncate(limit);
+    }
+
+    for (key, value) in sorted_map {
+        println!("{key}: {value}");
+    }
+}
+
+fn extract_capture_names(
+    source_code: &str,
+    ts_parser: &mut tree_sitter::Parser,
+    ts_query: &tree_sitter::Query,
+) -> Option<Vec<String>> {
+    let tree = ts_parser.parse(source_code, None)?;
+    let mut cursor = QueryCursor::new();
+    let text_bytes = source_code.as_bytes();
+    let mut captures = cursor.captures(&ts_query, tree.root_node(), text_bytes);
+
+    let mut capture_names: Vec<String> = Vec::new();
+    while let Some((c, _)) = captures.next() {
+        for capture in c.captures {
+            capture_names.push(capture.node.utf8_text(text_bytes).unwrap().to_string());
+        }
+    }
+
+    Some(capture_names)
 }
