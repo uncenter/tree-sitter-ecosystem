@@ -1,6 +1,6 @@
 # tree-sitter-ecosystem
 
-Analysis tools for the Tree-sitter ecosystem. <kbd>Cmd</kbd>
+Analysis tools for the Tree-sitter ecosystem.
 
 ## Crates
 
