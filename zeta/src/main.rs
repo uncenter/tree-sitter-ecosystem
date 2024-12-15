@@ -147,18 +147,20 @@ fn main() -> Result<()> {
             Comparisons::ByType => {
                 let mut language_extension_count = 0;
                 let mut theme_extension_count = 0;
-                let mut unknown_extension_count = 0;
+                let mut slash_command_extension_count = 0;
+                let mut context_server_extension_count = 0;
 
                 for extension in extensions {
                     match extension.r#type {
                         ExtensionType::Theme(_) => theme_extension_count += 1,
                         ExtensionType::Language(_) => language_extension_count += 1,
-                        ExtensionType::Unknown => unknown_extension_count += 1,
+                        ExtensionType::SlashCommand => slash_command_extension_count += 1,
+                        ExtensionType::ContextServer => context_server_extension_count += 1,
                     }
                 }
 
                 println!(
-                    "By Extension Type:\n\tTheme: {theme_extension_count}\n\tLanguage: {language_extension_count}\n\tUnknown: {unknown_extension_count}"
+                    "By Extension Type:\n\tTheme: {theme_extension_count}\n\tLanguage: {language_extension_count}\n\tSlash Command: {slash_command_extension_count}\n\tContext Server: {context_server_extension_count}"
                 );
             }
             Comparisons::ByManifest => {
@@ -276,7 +278,7 @@ fn main() -> Result<()> {
 
                         captures_by_language.insert(extension.id, captures);
                     }
-                    ExtensionType::Unknown => {}
+                    ExtensionType::SlashCommand | ExtensionType::ContextServer => {}
                 }
             }
 

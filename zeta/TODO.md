@@ -1,6 +1,0 @@
-- [ ] Change structure to have commands that dump analysis data, and others to run queries.
-  - [ ] Queries
-    - [ ] "how many themes support @<capture>?"
-    - [ ] "what are the most/least commonly used captures?"
-    - [ ] "what are the most/least supported captures?"
-- [ ] Scan for slash command, context server extensions

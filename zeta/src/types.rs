@@ -13,9 +13,11 @@ pub mod themes_v2_schema {
     include!(concat!(env!("OUT_DIR"), "/themes-v2.rs"));
 }
 
+/// zed-industries/extensions's `extensions.toml` file structure for tracking extensions as submodules.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExtensionsMetadata(pub HashMap<String, ExtensionsMetadataEntry>);
 
+/// Entry for an extension submodule in [`ExtensionsMetadata`].
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExtensionsMetadataEntry {
     pub submodule: String,
@@ -23,6 +25,7 @@ pub struct ExtensionsMetadataEntry {
     pub version: String,
 }
 
+/// Base structure for an extension.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Extension {
     pub id: String,
@@ -36,9 +39,11 @@ pub struct Extension {
 pub enum ExtensionType {
     Theme(ThemeExtension),
     Language(LanguageExtension),
-    Unknown,
+    SlashCommand,
+    ContextServer,
 }
 
+/// `extension.toml` or `extension.json` file structure for an extension.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ExtensionMetadata {
     TomlManifest(TomlManifest),
@@ -54,8 +59,10 @@ pub struct TomlManifest {
     pub schema_version: Option<usize>,
     pub authors: Vec<String>,
     pub repository: String,
-    pub grammars: Option<HashMap<String, ExtensionGrammars>>,
-    pub language_servers: Option<HashMap<String, ExtensionLanguageServers>>,
+    pub grammars: Option<HashMap<String, GrammarEntry>>,
+    pub language_servers: Option<HashMap<String, LanguageServerEntry>>,
+    pub context_servers: Option<HashMap<String, ContextServerEntry>>,
+    pub slash_commands: Option<HashMap<String, SlashCommandEntry>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -70,25 +77,41 @@ pub struct JsonManifest {
     pub grammars: Option<HashMap<String, String>>,
 }
 
+/// Entry for a grammar in [`ExtensionMetadata`].
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExtensionGrammars {
+pub struct GrammarEntry {
     pub repository: String,
     pub commit: Option<String>,
     pub rev: Option<String>,
 }
 
+/// Entry for a language server in [`ExtensionMetadata`].
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ExtensionLanguageServers {
+pub struct LanguageServerEntry {
     pub name: Option<String>,
     pub language: Option<String>,
     pub languages: Option<Vec<String>>,
 }
 
+/// Entry for a context server in [`ExtensionMetadata`].
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ContextServerEntry {
+    pub name: Option<String>,
+}
+
+/// Entry for a slash command in [`ExtensionMetadata`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SlashCommandEntry {
+    pub description: Option<String>,
+    pub requires_argument: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ThemeExtension {
     pub themes: Vec<Theme>,
 }
 
+/// `themes/<theme>.json` file structure for a theme in a [`ThemeExtension`].
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Theme {
     V1(Option<themes_v1_schema::ThemeFamilyContent>),
@@ -96,13 +119,74 @@ pub enum Theme {
     Invalid,
 }
 
+/// Basic struct for a JSON schema to check the schema version.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JsonSchema {
     #[serde(rename = "$schema")]
     pub schema: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl ThemeExtension {
+    pub fn from_scan(themes_dir: &PathBuf) -> Result<Self> {
+        let mut themes: Vec<Theme> = Vec::new();
+
+        for entry in fs::read_dir(themes_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() && path.extension().is_some_and(|e| e == "json") {
+                let contents = fs::read_to_string(&path)?;
+                let json = serde_json_lenient::from_str::<JsonSchema>(&contents).ok();
+
+                let theme_family_content = match json {
+                    Some(json)
+                        if json.schema.as_str() == "https://zed.dev/schema/themes/v0.1.0.json" =>
+                    {
+                        Theme::V1(
+                            serde_json_lenient::from_str::<themes_v1_schema::ThemeFamilyContent>(
+                                &contents,
+                            )
+                            .map_err(|e| {
+                                warn!("Error parsing v1 theme: {}", e);
+                            })
+                            .ok(),
+                        )
+                    }
+                    Some(json)
+                        if json.schema.as_str() == "https://zed.dev/schema/themes/v0.2.0.json" =>
+                    {
+                        Theme::V2(
+                            serde_json_lenient::from_str::<themes_v2_schema::ThemeFamilyContent>(
+                                &contents,
+                            )
+                            .map_err(|e| {
+                                warn!("Error parsing v2 theme: {}", e);
+                            })
+                            .ok(),
+                        )
+                    }
+                    _ => match serde_json_lenient::from_str(&contents) {
+                        Ok(v1) => Theme::V1(Some(v1)),
+                        Err(_) => {
+                            if let Ok(v2) = serde_json_lenient::from_str(&contents) {
+                                Theme::V2(Some(v2))
+                            } else {
+                                warn!("Error parsing theme: {}", path.to_string_lossy());
+                                Theme::Invalid
+                            }
+                        }
+                    },
+                };
+
+                themes.push(theme_family_content);
+            }
+        }
+
+        Ok(ThemeExtension { themes })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct LanguageExtension {
     pub languages: Vec<Language>,
 }
@@ -176,65 +260,5 @@ impl LanguageExtension {
         }
 
         Ok(Self { languages })
-    }
-}
-
-impl ThemeExtension {
-    pub fn from_scan(themes_dir: &PathBuf) -> Result<Self> {
-        let mut themes: Vec<Theme> = Vec::new();
-
-        for entry in fs::read_dir(themes_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() && path.extension().is_some_and(|e| e == "json") {
-                let contents = fs::read_to_string(&path)?;
-                let json = serde_json_lenient::from_str::<JsonSchema>(&contents).ok();
-
-                let theme_family_content = match json {
-                    Some(json)
-                        if json.schema.as_str() == "https://zed.dev/schema/themes/v0.1.0.json" =>
-                    {
-                        Theme::V1(
-                            serde_json_lenient::from_str::<themes_v1_schema::ThemeFamilyContent>(
-                                &contents,
-                            )
-                            .map_err(|e| {
-                                warn!("Error parsing v1 theme: {}", e);
-                            })
-                            .ok(),
-                        )
-                    }
-                    Some(json)
-                        if json.schema.as_str() == "https://zed.dev/schema/themes/v0.2.0.json" =>
-                    {
-                        Theme::V2(
-                            serde_json_lenient::from_str::<themes_v2_schema::ThemeFamilyContent>(
-                                &contents,
-                            )
-                            .map_err(|e| {
-                                warn!("Error parsing v2 theme: {}", e);
-                            })
-                            .ok(),
-                        )
-                    }
-                    _ => match serde_json_lenient::from_str(&contents) {
-                        Ok(v1) => Theme::V1(Some(v1)),
-                        Err(_) => {
-                            if let Ok(v2) = serde_json_lenient::from_str(&contents) {
-                                Theme::V2(Some(v2))
-                            } else {
-                                warn!("Error parsing theme: {}", path.to_string_lossy());
-                                Theme::Invalid
-                            }
-                        }
-                    },
-                };
-
-                themes.push(theme_family_content);
-            }
-        }
-
-        Ok(ThemeExtension { themes })
     }
 }

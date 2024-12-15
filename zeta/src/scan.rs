@@ -67,7 +67,34 @@ pub fn extensions(extensions_dir: &PathBuf) -> Result<Vec<Extension>> {
             (_, theme_path) if theme_path.exists() => {
                 ExtensionType::Theme(ThemeExtension::from_scan(&theme_path)?)
             }
-            _ => ExtensionType::Unknown,
+            _ => match &metadata {
+                ExtensionMetadata::TomlManifest(manifest) => {
+                    if manifest.grammars.is_some() || manifest.language_servers.is_some() {
+                        ExtensionType::Language(LanguageExtension::default())
+                    } else if manifest.slash_commands.is_some() {
+                        ExtensionType::SlashCommand
+                    } else if manifest.context_servers.is_some() {
+                        ExtensionType::ContextServer
+                    } else {
+                        anyhow::bail!(
+                            "Unknown extension type for extension '{}' with TOML manifest",
+                            id
+                        );
+                    }
+                }
+                ExtensionMetadata::JsonManifest(manifest) => {
+                    if manifest.grammars.is_some() || manifest.languages.is_some() {
+                        ExtensionType::Language(LanguageExtension::default())
+                    } else if manifest.themes.is_some() {
+                        ExtensionType::Theme(ThemeExtension::default())
+                    } else {
+                        anyhow::bail!(
+                            "Unknown extension type for extension '{}' with JSON manifest",
+                            id
+                        );
+                    }
+                }
+            },
         };
 
         extensions.push(Extension {
