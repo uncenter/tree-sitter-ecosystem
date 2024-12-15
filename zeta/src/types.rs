@@ -4,13 +4,12 @@ use anyhow::Result;
 use log::warn;
 use serde::{Deserialize, Serialize};
 
-#[allow(clippy::all)]
 pub mod themes_v1_schema {
+    #![allow(clippy::all)]
     include!(concat!(env!("OUT_DIR"), "/themes-v1.rs"));
 }
-
-#[allow(clippy::all)]
 pub mod themes_v2_schema {
+    #![allow(clippy::all)]
     include!(concat!(env!("OUT_DIR"), "/themes-v2.rs"));
 }
 

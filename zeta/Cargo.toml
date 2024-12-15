@@ -24,7 +24,3 @@ reqwest = { version = "0.12.9", features = ["blocking"] }
 schemars = "0.8.21"
 serde_json = "1.0.133"
 typify = "0.2.0"
-
-[lints.clippy]
-all = "warn"
-pedantic = "warn"

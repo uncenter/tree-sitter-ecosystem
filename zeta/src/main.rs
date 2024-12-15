@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic, clippy::all)]
+
 use anyhow::Result;
 use clap::{arg, Parser, Subcommand, ValueEnum};
 use log::debug;
