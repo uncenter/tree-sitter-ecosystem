@@ -13,7 +13,7 @@ use tree_sitter::QueryCursor;
 
 use zeta::{
     scan,
-    types::{Extension, ExtensionMetadata, ExtensionType},
+    types::{Extension, ExtensionMetadata, ExtensionType, Theme},
 };
 
 #[derive(Parser)]
@@ -143,82 +143,81 @@ fn main() -> Result<()> {
     }
 
     match args.command {
-        Commands::Compare { comparison } => match comparison {
-            Comparisons::ByType => {
-                let mut language_extension_count = 0;
-                let mut theme_extension_count = 0;
-                let mut slash_command_extension_count = 0;
-                let mut context_server_extension_count = 0;
+        Commands::Compare { comparison } => {
+            match comparison {
+                Comparisons::ByType => {
+                    let mut language_extension_count = 0;
+                    let mut theme_extension_count = 0;
+                    let mut slash_command_extension_count = 0;
+                    let mut context_server_extension_count = 0;
 
-                for extension in extensions {
-                    match extension.r#type {
-                        ExtensionType::Theme(_) => theme_extension_count += 1,
-                        ExtensionType::Language(_) => language_extension_count += 1,
-                        ExtensionType::SlashCommand => slash_command_extension_count += 1,
-                        ExtensionType::ContextServer => context_server_extension_count += 1,
+                    for extension in extensions {
+                        match extension.r#type {
+                            ExtensionType::Theme(_) => theme_extension_count += 1,
+                            ExtensionType::Language(_) => language_extension_count += 1,
+                            ExtensionType::SlashCommand => slash_command_extension_count += 1,
+                            ExtensionType::ContextServer => context_server_extension_count += 1,
+                        }
                     }
-                }
 
-                println!(
-                    "By Extension Type:\n\tTheme: {theme_extension_count}\n\tLanguage: {language_extension_count}\n\tSlash Command: {slash_command_extension_count}\n\tContext Server: {context_server_extension_count}"
+                    println!(
+                    "Theme Extensions: {theme_extension_count}\nLanguage Extensions: {language_extension_count}\nSlash Command Extensions: {slash_command_extension_count}\nContext Server Extensions: {context_server_extension_count}"
                 );
-            }
-            Comparisons::ByManifest => {
-                let mut toml_manifest_count = 0;
-                let mut json_manifest_count = 0;
+                }
+                Comparisons::ByManifest => {
+                    let mut toml_manifest_count = 0;
+                    let mut json_manifest_count = 0;
 
-                for extension in extensions {
-                    match extension.metadata {
-                        ExtensionMetadata::TomlManifest(_) => toml_manifest_count += 1,
-                        ExtensionMetadata::JsonManifest(_) => json_manifest_count += 1,
+                    for extension in extensions {
+                        match extension.metadata {
+                            ExtensionMetadata::TomlManifest(_) => toml_manifest_count += 1,
+                            ExtensionMetadata::JsonManifest(_) => json_manifest_count += 1,
+                        }
+                    }
+
+                    println!("TOML Manifest: {toml_manifest_count}\nJSON Manifest: {json_manifest_count}");
+                }
+                Comparisons::ByGitProvider => {
+                    let mut by_git_provider: HashMap<String, usize> = HashMap::new();
+
+                    for extension in extensions {
+                        if !extension.builtin {
+                            *by_git_provider
+                                .entry(
+                                    extension
+                                        .git_provider
+                                        .expect("non-builtin extensions should have a git_provider")
+                                        .clone(),
+                                )
+                                .or_default() += 1;
+                        }
+                    }
+
+                    for (provider, count) in &by_git_provider {
+                        println!("{provider}: {count}");
                     }
                 }
+                Comparisons::ByThemeSchema => {
+                    let mut v1_count = 0;
+                    let mut v2_count = 0;
+                    let mut invalid_count = 0;
 
-                println!("By Manifest Type:\n\tWith TOML Manifest: {toml_manifest_count}\n\tWith JSON Manifest: {json_manifest_count}");
-            }
-            Comparisons::ByGitProvider => {
-                let mut by_git_provider: HashMap<String, usize> = HashMap::new();
-
-                for extension in extensions {
-                    if !extension.builtin {
-                        *by_git_provider
-                            .entry(
-                                extension
-                                    .git_provider
-                                    .expect("non-builtin extensions should have a git_provider")
-                                    .clone(),
-                            )
-                            .or_default() += 1;
-                    }
-                }
-
-                println!("By Git Provider:");
-                for (provider, count) in &by_git_provider {
-                    println!("\t{provider}: {count}");
-                }
-            }
-            Comparisons::ByThemeSchema => {
-                let mut v1_count = 0;
-                let mut v2_count = 0;
-                let mut invalid_count = 0;
-
-                for extension in extensions {
-                    if let ExtensionType::Theme(theme_extension) = extension.r#type {
-                        for theme in theme_extension.themes {
-                            match theme {
-                                zeta::types::Theme::V1(_) => v1_count += 1,
-                                zeta::types::Theme::V2(_) => v2_count += 1,
-                                zeta::types::Theme::Invalid => invalid_count += 1,
+                    for extension in extensions {
+                        if let ExtensionType::Theme(theme_extension) = extension.r#type {
+                            for theme in theme_extension.themes {
+                                match theme {
+                                    Some(Theme::V1(_)) => v1_count += 1,
+                                    Some(Theme::V2(_)) => v2_count += 1,
+                                    None => invalid_count += 1,
+                                }
                             }
                         }
                     }
-                }
 
-                println!(
-                    "By Theme Schema:\n\tV1: {v1_count}\n\tV2: {v2_count}\n\tInvalid: {invalid_count}"
-                );
+                    println!("V1: {v1_count}\nV2: {v2_count}\nInvalid: {invalid_count}");
+                }
             }
-        },
+        }
         Commands::Query { query } => {
             let mut supported_captures_by_theme: HashMap<String, Vec<String>> = HashMap::new();
             let mut captures_by_language: HashMap<String, Vec<String>> = HashMap::new();
@@ -241,12 +240,12 @@ fn main() -> Result<()> {
                             .themes
                             .iter()
                             .flat_map(|theme| match theme {
-                                zeta::types::Theme::V1(Some(theme)) => theme
+                                Some(Theme::V1(Some(theme))) => theme
                                     .themes
                                     .iter()
                                     .flat_map(|theme| theme.style.syntax.keys())
                                     .collect::<Vec<&String>>(),
-                                zeta::types::Theme::V2(Some(theme)) => theme
+                                Some(Theme::V2(Some(theme))) => theme
                                     .themes
                                     .iter()
                                     .flat_map(|theme| theme.style.syntax.keys())

@@ -108,7 +108,7 @@ pub struct SlashCommandEntry {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct ThemeExtension {
-    pub themes: Vec<Theme>,
+    pub themes: Vec<Option<Theme>>,
 }
 
 /// `themes/<theme>.json` file structure for a theme in a [`ThemeExtension`].
@@ -116,7 +116,6 @@ pub struct ThemeExtension {
 pub enum Theme {
     V1(Option<themes_v1_schema::ThemeFamilyContent>),
     V2(Option<themes_v2_schema::ThemeFamilyContent>),
-    Invalid,
 }
 
 /// Basic struct for a JSON schema to check the schema version.
@@ -128,7 +127,7 @@ pub struct JsonSchema {
 
 impl ThemeExtension {
     pub fn from_scan(themes_dir: &PathBuf) -> Result<Self> {
-        let mut themes: Vec<Theme> = Vec::new();
+        let mut themes: Vec<Option<Theme>> = Vec::new();
 
         for entry in fs::read_dir(themes_dir)? {
             let entry = entry?;
@@ -142,7 +141,7 @@ impl ThemeExtension {
                     Some(json)
                         if json.schema.as_str() == "https://zed.dev/schema/themes/v0.1.0.json" =>
                     {
-                        Theme::V1(
+                        Some(Theme::V1(
                             serde_json_lenient::from_str::<themes_v1_schema::ThemeFamilyContent>(
                                 &contents,
                             )
@@ -150,12 +149,12 @@ impl ThemeExtension {
                                 warn!("Error parsing v1 theme: {}", e);
                             })
                             .ok(),
-                        )
+                        ))
                     }
                     Some(json)
                         if json.schema.as_str() == "https://zed.dev/schema/themes/v0.2.0.json" =>
                     {
-                        Theme::V2(
+                        Some(Theme::V2(
                             serde_json_lenient::from_str::<themes_v2_schema::ThemeFamilyContent>(
                                 &contents,
                             )
@@ -163,16 +162,16 @@ impl ThemeExtension {
                                 warn!("Error parsing v2 theme: {}", e);
                             })
                             .ok(),
-                        )
+                        ))
                     }
                     _ => match serde_json_lenient::from_str(&contents) {
-                        Ok(v1) => Theme::V1(Some(v1)),
+                        Ok(v1) => Some(Theme::V1(Some(v1))),
                         Err(_) => {
                             if let Ok(v2) = serde_json_lenient::from_str(&contents) {
-                                Theme::V2(Some(v2))
+                                Some(Theme::V2(Some(v2)))
                             } else {
                                 warn!("Error parsing theme: {}", path.to_string_lossy());
-                                Theme::Invalid
+                                None
                             }
                         }
                     },
