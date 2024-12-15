@@ -28,24 +28,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Compare counts of extensions by basic properties like type, manifest format, Git provider, and theme schema.
-    Compare { comparison: Comparisons },
-    /// Query capture-related statistics, and theme/language relationships in terms of captures.
-    Query {
+    /// Count extensions by basic properties like type, manifest format, Git provider, and theme schema.
+    Count { category: CountCategory },
+    /// Analyze extensions with various queries, mostly related to captures.
+    Analyze {
         #[command(subcommand)]
-        query: Queries,
+        query: AnalysisQuery,
     },
 }
 
 #[derive(Clone, ValueEnum)]
-pub enum Comparisons {
-    /// Compare counts of extensions by type (theme or language).
+pub enum CountCategory {
+    /// Count extensions by type (theme or language).
     ByType,
-    /// Compare counts of extensions by manifest format (TOML or JSON).
+    /// Count extensions by manifest format (TOML or JSON).
     ByManifest,
-    /// Compare counts of extensions by Git provider (e.g. GitHub, GitLab).
+    /// Count extensions by Git provider (e.g. GitHub, GitLab).
     ByGitProvider,
-    /// Compare counts of theme extensions by theme schema: V1, V2, or Invalid (no theme schema / unknown).
+    /// Count theme extensions by theme schema: V1, V2, or Invalid (no theme schema / unknown).
     ByThemeSchema,
 }
 
@@ -58,7 +58,7 @@ pub enum SortOrder {
 }
 
 #[derive(Subcommand)]
-pub enum Queries {
+pub enum AnalysisQuery {
     /// Query the most (order: desc) or least (order: asc) used captures in language extensions.
     CapturesByUsage {
         order: SortOrder,
@@ -143,283 +143,8 @@ fn main() -> Result<()> {
     }
 
     match args.command {
-        Commands::Compare { comparison } => {
-            match comparison {
-                Comparisons::ByType => {
-                    let mut language_extension_count = 0;
-                    let mut theme_extension_count = 0;
-                    let mut slash_command_extension_count = 0;
-                    let mut context_server_extension_count = 0;
-
-                    for extension in extensions {
-                        match extension.r#type {
-                            ExtensionType::Theme(_) => theme_extension_count += 1,
-                            ExtensionType::Language(_) => language_extension_count += 1,
-                            ExtensionType::SlashCommand => slash_command_extension_count += 1,
-                            ExtensionType::ContextServer => context_server_extension_count += 1,
-                        }
-                    }
-
-                    println!(
-                    "Theme Extensions: {theme_extension_count}\nLanguage Extensions: {language_extension_count}\nSlash Command Extensions: {slash_command_extension_count}\nContext Server Extensions: {context_server_extension_count}"
-                );
-                }
-                Comparisons::ByManifest => {
-                    let mut toml_manifest_count = 0;
-                    let mut json_manifest_count = 0;
-
-                    for extension in extensions {
-                        match extension.metadata {
-                            ExtensionMetadata::TomlManifest(_) => toml_manifest_count += 1,
-                            ExtensionMetadata::JsonManifest(_) => json_manifest_count += 1,
-                        }
-                    }
-
-                    println!("TOML Manifest: {toml_manifest_count}\nJSON Manifest: {json_manifest_count}");
-                }
-                Comparisons::ByGitProvider => {
-                    let mut by_git_provider: HashMap<String, usize> = HashMap::new();
-
-                    for extension in extensions {
-                        if !extension.builtin {
-                            *by_git_provider
-                                .entry(
-                                    extension
-                                        .git_provider
-                                        .expect("non-builtin extensions should have a git_provider")
-                                        .clone(),
-                                )
-                                .or_default() += 1;
-                        }
-                    }
-
-                    for (provider, count) in &by_git_provider {
-                        println!("{provider}: {count}");
-                    }
-                }
-                Comparisons::ByThemeSchema => {
-                    let mut v1_count = 0;
-                    let mut v2_count = 0;
-                    let mut invalid_count = 0;
-
-                    for extension in extensions {
-                        if let ExtensionType::Theme(theme_extension) = extension.r#type {
-                            for theme in theme_extension.themes {
-                                match theme {
-                                    Some(Theme::V1(_)) => v1_count += 1,
-                                    Some(Theme::V2(_)) => v2_count += 1,
-                                    None => invalid_count += 1,
-                                }
-                            }
-                        }
-                    }
-
-                    println!("V1: {v1_count}\nV2: {v2_count}\nInvalid: {invalid_count}");
-                }
-            }
-        }
-        Commands::Query { query } => {
-            let mut supported_captures_by_theme: HashMap<String, Vec<String>> = HashMap::new();
-            let mut captures_by_language: HashMap<String, Vec<String>> = HashMap::new();
-
-            let mut ts_parser = tree_sitter::Parser::new();
-            ts_parser
-                .set_language(&tree_sitter_query::LANGUAGE.into())
-                .expect("Error loading Query grammar");
-
-            let ts_query = tree_sitter::Query::new(
-                &tree_sitter_query::LANGUAGE.into(),
-                "(capture (identifier) @name) ",
-            )
-            .expect("tree-sitter-query capture query should build");
-
-            for extension in extensions {
-                match extension.r#type {
-                    ExtensionType::Theme(theme_extension) => {
-                        let mut syntax_captures: Vec<String> = theme_extension
-                            .themes
-                            .iter()
-                            .flat_map(|theme| match theme {
-                                Some(Theme::V1(Some(theme))) => theme
-                                    .themes
-                                    .iter()
-                                    .flat_map(|theme| theme.style.syntax.keys())
-                                    .collect::<Vec<&String>>(),
-                                Some(Theme::V2(Some(theme))) => theme
-                                    .themes
-                                    .iter()
-                                    .flat_map(|theme| theme.style.syntax.keys())
-                                    .collect::<Vec<&String>>(),
-                                _ => Vec::new(),
-                            })
-                            .cloned()
-                            .collect();
-
-                        syntax_captures.sort_unstable();
-                        syntax_captures.dedup();
-
-                        supported_captures_by_theme.insert(extension.id, syntax_captures);
-                    }
-                    ExtensionType::Language(language_extension) => {
-                        let captures: Vec<String> = language_extension
-                            .languages
-                            .iter()
-                            .filter_map(|language| {
-                                if let Some(highlights) = &language.highlights_queries {
-                                    extract_capture_names(highlights, &mut ts_parser, &ts_query)
-                                } else {
-                                    None
-                                }
-                            })
-                            .flatten()
-                            .filter(|capture| !capture.starts_with('_'))
-                            .collect();
-
-                        captures_by_language.insert(extension.id, captures);
-                    }
-                    ExtensionType::SlashCommand | ExtensionType::ContextServer => {}
-                }
-            }
-
-            match query {
-                Queries::CapturesByUsage { order, limit } => {
-                    let mut capture_counts: HashMap<String, usize> = HashMap::new();
-                    let captures_by_language: Vec<String> = captures_by_language
-                        .into_values()
-                        .flat_map(|mut values| {
-                            let mut seen = HashSet::new();
-                            values
-                                .drain(..)
-                                .filter(|item| seen.insert(item.clone()))
-                                .collect::<Vec<String>>()
-                        })
-                        .collect();
-
-                    for capture in captures_by_language {
-                        *capture_counts.entry(capture).or_default() += 1;
-                    }
-
-                    sort_truncate_display_hashmap(&capture_counts, &order, limit);
-                }
-                Queries::CapturesByThemeSupport { order, limit } => {
-                    let mut capture_counts: HashMap<String, usize> = HashMap::new();
-                    for captures in supported_captures_by_theme.values() {
-                        for capture in captures {
-                            *capture_counts.entry(capture.clone()).or_default() += 1;
-                        }
-                    }
-
-                    sort_truncate_display_hashmap(&capture_counts, &order, limit);
-                }
-
-                Queries::ThemesSupportingCapture { capture, count } => {
-                    let themes_with_support = supported_captures_by_theme
-                        .iter()
-                        .filter(|(_, supported_captures)| supported_captures.contains(&capture));
-                    println!(
-                        "{}",
-                        if count {
-                            themes_with_support.count().to_string()
-                        } else {
-                            themes_with_support
-                                .map(|(theme, _)| theme)
-                                .cloned()
-                                .collect::<Vec<String>>()
-                                .join("\n")
-                        }
-                    );
-                }
-                Queries::LanguagesUsingCapture { capture, count } => {
-                    let languages_using_capture =
-                        captures_by_language
-                            .iter()
-                            .filter_map(|(language, captures)| {
-                                if captures.contains(&capture) {
-                                    Some(language)
-                                } else {
-                                    None
-                                }
-                            });
-                    println!("{}", count_or_list(languages_using_capture, count));
-                }
-
-                Queries::LanguagesByThemeSupport { order, limit } => {
-                    let mut language_support_scores: HashMap<String, usize> = HashMap::new();
-
-                    for (language, captures) in &captures_by_language {
-                        // Average number of themes supporting each capture.
-                        let capture_support_depth: usize = captures
-                            .iter()
-                            .map(|capture| {
-                                supported_captures_by_theme
-                                    .values()
-                                    .filter(|captures| captures.contains(capture))
-                                    .count()
-                            })
-                            .sum();
-
-                        // Count of themes supporting at least one capture.
-                        let theme_support_breadth = supported_captures_by_theme
-                            .values()
-                            .filter(|supported_captures| {
-                                supported_captures
-                                    .iter()
-                                    .any(|capture| captures.contains(capture))
-                            })
-                            .count();
-
-                        let scaled_capture_support_depth =
-                            7 * capture_support_depth / captures.len();
-                        let scaled_theme_support_breadth = 3 * theme_support_breadth;
-
-                        let support_score =
-                            scaled_capture_support_depth + scaled_theme_support_breadth;
-
-                        language_support_scores.insert(language.clone(), support_score);
-                    }
-
-                    sort_truncate_display_hashmap(&language_support_scores, &order, limit);
-                }
-
-                Queries::ThemesByCaptureSupport { order, limit } => {
-                    let used_captures: HashSet<String> =
-                        captures_by_language.values().flatten().cloned().collect();
-
-                    let themes_by_used_captures_support: Vec<(&String, usize)> =
-                        supported_captures_by_theme
-                            .iter()
-                            .map(|(theme, captures)| {
-                                (
-                                    theme,
-                                    captures
-                                        .iter()
-                                        .filter(|capture| used_captures.contains(*capture))
-                                        .count(),
-                                )
-                            })
-                            .collect();
-
-                    let mut sorted_themes: Vec<(&String, usize)> = themes_by_used_captures_support;
-
-                    match order {
-                        SortOrder::Asc | SortOrder::Ascending => {
-                            sorted_themes.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-                        }
-                        SortOrder::Desc | SortOrder::Descending => {
-                            sorted_themes.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-                        }
-                    }
-
-                    if limit != 0 {
-                        sorted_themes.truncate(limit);
-                    }
-
-                    for (theme, count) in sorted_themes {
-                        println!("{theme}: {count}");
-                    }
-                }
-            };
-        }
+        Commands::Count { category } => handle_count_category(&category, extensions),
+        Commands::Analyze { query } => handle_query(query, extensions),
     }
 
     Ok(())
@@ -464,7 +189,7 @@ fn extract_capture_names(
     let tree = ts_parser.parse(source_code, None)?;
     let mut cursor = QueryCursor::new();
     let text_bytes = source_code.as_bytes();
-    let mut captures = cursor.captures(&ts_query, tree.root_node(), text_bytes);
+    let mut captures = cursor.captures(ts_query, tree.root_node(), text_bytes);
 
     let mut capture_names: Vec<String> = Vec::new();
     while let Some((c, _)) = captures.next() {
@@ -474,4 +199,281 @@ fn extract_capture_names(
     }
 
     Some(capture_names)
+}
+
+fn handle_count_category(category: &CountCategory, extensions: Vec<Extension>) {
+    match category {
+        CountCategory::ByType => {
+            let mut language_extension_count = 0;
+            let mut theme_extension_count = 0;
+            let mut slash_command_extension_count = 0;
+            let mut context_server_extension_count = 0;
+
+            for extension in extensions {
+                match extension.r#type {
+                    ExtensionType::Theme(_) => theme_extension_count += 1,
+                    ExtensionType::Language(_) => language_extension_count += 1,
+                    ExtensionType::SlashCommand => slash_command_extension_count += 1,
+                    ExtensionType::ContextServer => context_server_extension_count += 1,
+                }
+            }
+
+            println!(
+            "Theme Extensions: {theme_extension_count}\nLanguage Extensions: {language_extension_count}\nSlash Command Extensions: {slash_command_extension_count}\nContext Server Extensions: {context_server_extension_count}"
+        );
+        }
+        CountCategory::ByManifest => {
+            let mut toml_manifest_count = 0;
+            let mut json_manifest_count = 0;
+
+            for extension in extensions {
+                match extension.metadata {
+                    ExtensionMetadata::TomlManifest(_) => toml_manifest_count += 1,
+                    ExtensionMetadata::JsonManifest(_) => json_manifest_count += 1,
+                }
+            }
+
+            println!("TOML Manifest: {toml_manifest_count}\nJSON Manifest: {json_manifest_count}");
+        }
+        CountCategory::ByGitProvider => {
+            let mut by_git_provider: HashMap<String, usize> = HashMap::new();
+
+            for extension in extensions {
+                if !extension.builtin {
+                    *by_git_provider
+                        .entry(
+                            extension
+                                .git_provider
+                                .expect("non-builtin extensions should have a git_provider")
+                                .clone(),
+                        )
+                        .or_default() += 1;
+                }
+            }
+
+            for (provider, count) in &by_git_provider {
+                println!("{provider}: {count}");
+            }
+        }
+        CountCategory::ByThemeSchema => {
+            let mut v1_count = 0;
+            let mut v2_count = 0;
+            let mut invalid_count = 0;
+
+            for extension in extensions {
+                if let ExtensionType::Theme(theme_extension) = extension.r#type {
+                    for theme in theme_extension.themes {
+                        match theme {
+                            Some(Theme::V1(_)) => v1_count += 1,
+                            Some(Theme::V2(_)) => v2_count += 1,
+                            None => invalid_count += 1,
+                        }
+                    }
+                }
+            }
+
+            println!("V1: {v1_count}\nV2: {v2_count}\nInvalid: {invalid_count}");
+        }
+    }
+}
+
+fn handle_query(query: AnalysisQuery, extensions: Vec<Extension>) {
+    let mut supported_captures_by_theme: HashMap<String, Vec<String>> = HashMap::new();
+    let mut captures_by_language: HashMap<String, Vec<String>> = HashMap::new();
+
+    let mut ts_parser = tree_sitter::Parser::new();
+    ts_parser
+        .set_language(&tree_sitter_query::LANGUAGE.into())
+        .expect("Error loading Query grammar");
+
+    let ts_query = tree_sitter::Query::new(
+        &tree_sitter_query::LANGUAGE.into(),
+        "(capture (identifier) @name) ",
+    )
+    .expect("tree-sitter-query capture query should build");
+
+    for extension in extensions {
+        match extension.r#type {
+            ExtensionType::Theme(theme_extension) => {
+                let mut syntax_captures: Vec<String> = theme_extension
+                    .themes
+                    .iter()
+                    .flat_map(|theme| match theme {
+                        Some(Theme::V1(Some(theme))) => theme
+                            .themes
+                            .iter()
+                            .flat_map(|theme| theme.style.syntax.keys())
+                            .collect::<Vec<&String>>(),
+                        Some(Theme::V2(Some(theme))) => theme
+                            .themes
+                            .iter()
+                            .flat_map(|theme| theme.style.syntax.keys())
+                            .collect::<Vec<&String>>(),
+                        _ => Vec::new(),
+                    })
+                    .cloned()
+                    .collect();
+
+                syntax_captures.sort_unstable();
+                syntax_captures.dedup();
+
+                supported_captures_by_theme.insert(extension.id, syntax_captures);
+            }
+            ExtensionType::Language(language_extension) => {
+                let captures: Vec<String> = language_extension
+                    .languages
+                    .iter()
+                    .filter_map(|language| {
+                        if let Some(highlights) = &language.highlights_queries {
+                            extract_capture_names(highlights, &mut ts_parser, &ts_query)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                    .filter(|capture| !capture.starts_with('_'))
+                    .collect();
+
+                captures_by_language.insert(extension.id, captures);
+            }
+            ExtensionType::SlashCommand | ExtensionType::ContextServer => {}
+        }
+    }
+
+    match query {
+        AnalysisQuery::CapturesByUsage { order, limit } => {
+            let mut capture_counts: HashMap<String, usize> = HashMap::new();
+            let captures_by_language: Vec<String> = captures_by_language
+                .into_values()
+                .flat_map(|mut values| {
+                    let mut seen = HashSet::new();
+                    values
+                        .drain(..)
+                        .filter(|item| seen.insert(item.clone()))
+                        .collect::<Vec<String>>()
+                })
+                .collect();
+
+            for capture in captures_by_language {
+                *capture_counts.entry(capture).or_default() += 1;
+            }
+
+            sort_truncate_display_hashmap(&capture_counts, &order, limit);
+        }
+        AnalysisQuery::CapturesByThemeSupport { order, limit } => {
+            let mut capture_counts: HashMap<String, usize> = HashMap::new();
+            for captures in supported_captures_by_theme.values() {
+                for capture in captures {
+                    *capture_counts.entry(capture.clone()).or_default() += 1;
+                }
+            }
+
+            sort_truncate_display_hashmap(&capture_counts, &order, limit);
+        }
+
+        AnalysisQuery::ThemesSupportingCapture { capture, count } => {
+            let themes_with_support = supported_captures_by_theme
+                .iter()
+                .filter(|(_, supported_captures)| supported_captures.contains(&capture));
+            println!(
+                "{}",
+                if count {
+                    themes_with_support.count().to_string()
+                } else {
+                    themes_with_support
+                        .map(|(theme, _)| theme)
+                        .cloned()
+                        .collect::<Vec<String>>()
+                        .join("\n")
+                }
+            );
+        }
+        AnalysisQuery::LanguagesUsingCapture { capture, count } => {
+            let languages_using_capture =
+                captures_by_language
+                    .iter()
+                    .filter_map(|(language, captures)| {
+                        if captures.contains(&capture) {
+                            Some(language)
+                        } else {
+                            None
+                        }
+                    });
+            println!("{}", count_or_list(languages_using_capture, count));
+        }
+
+        AnalysisQuery::LanguagesByThemeSupport { order, limit } => {
+            let mut language_support_scores: HashMap<String, usize> = HashMap::new();
+
+            for (language, captures) in &captures_by_language {
+                // Average number of themes supporting each capture.
+                let capture_support_depth: usize = captures
+                    .iter()
+                    .map(|capture| {
+                        supported_captures_by_theme
+                            .values()
+                            .filter(|captures| captures.contains(capture))
+                            .count()
+                    })
+                    .sum();
+
+                // Count of themes supporting at least one capture.
+                let theme_support_breadth = supported_captures_by_theme
+                    .values()
+                    .filter(|supported_captures| {
+                        supported_captures
+                            .iter()
+                            .any(|capture| captures.contains(capture))
+                    })
+                    .count();
+
+                let scaled_capture_support_depth = 7 * capture_support_depth / captures.len();
+                let scaled_theme_support_breadth = 3 * theme_support_breadth;
+
+                let support_score = scaled_capture_support_depth + scaled_theme_support_breadth;
+
+                language_support_scores.insert(language.clone(), support_score);
+            }
+
+            sort_truncate_display_hashmap(&language_support_scores, &order, limit);
+        }
+
+        AnalysisQuery::ThemesByCaptureSupport { order, limit } => {
+            let used_captures: HashSet<String> =
+                captures_by_language.values().flatten().cloned().collect();
+
+            let themes_by_used_captures_support: Vec<(&String, usize)> =
+                supported_captures_by_theme
+                    .iter()
+                    .map(|(theme, captures)| {
+                        (
+                            theme,
+                            captures
+                                .iter()
+                                .filter(|capture| used_captures.contains(*capture))
+                                .count(),
+                        )
+                    })
+                    .collect();
+
+            let mut sorted_themes: Vec<(&String, usize)> = themes_by_used_captures_support;
+
+            match order {
+                SortOrder::Asc | SortOrder::Ascending => {
+                    sorted_themes.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+                }
+                SortOrder::Desc | SortOrder::Descending => {
+                    sorted_themes.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+                }
+            }
+
+            if limit != 0 {
+                sorted_themes.truncate(limit);
+            }
+
+            for (theme, count) in sorted_themes {
+                println!("{theme}: {count}");
+            }
+        }
+    };
 }
