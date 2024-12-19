@@ -28,8 +28,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Count extensions by basic properties like type, manifest format, Git provider, and theme schema.
-    Count { category: CountCategory },
+    /// Find extensions matching certain criteria.
+    Find {
+        #[arg(long)]
+        manifest: Option<BasicManifestType>,
+
+        #[arg(long)]
+        r#type: Option<BasicExtensionType>,
+
+        #[arg(long)]
+        git_provider: Option<String>,
+
+        #[arg(long)]
+        theme_schema: Option<BasicThemeSchema>,
+
+        #[arg(long)]
+        count: bool,
+    },
     /// Analyze extensions with various queries, mostly related to captures.
     Analyze {
         #[command(subcommand)]
@@ -38,23 +53,32 @@ pub enum Commands {
 }
 
 #[derive(Clone, ValueEnum)]
-pub enum CountCategory {
-    /// Count extensions by type (theme or language).
-    ByType,
-    /// Count extensions by manifest format (TOML or JSON).
-    ByManifest,
-    /// Count extensions by Git provider (e.g. GitHub, GitLab).
-    ByGitProvider,
-    /// Count theme extensions by theme schema: V1, V2, or Invalid (no theme schema / unknown).
-    ByThemeSchema,
-}
-
-#[derive(Clone, ValueEnum)]
 pub enum SortOrder {
     Asc,
     Desc,
     Ascending,
     Descending,
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum BasicManifestType {
+    Json,
+    Toml,
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum BasicExtensionType {
+    Theme,
+    Language,
+    SlashCommand,
+    ContextServer,
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum BasicThemeSchema {
+    V1,
+    V2,
+    Other,
 }
 
 #[derive(Subcommand)]
@@ -143,18 +167,102 @@ fn main() -> Result<()> {
     }
 
     match args.command {
-        Commands::Count { category } => handle_count_category(&category, extensions),
         Commands::Analyze { query } => handle_query(query, extensions),
+        Commands::Find {
+            manifest,
+            r#type,
+            git_provider,
+            theme_schema,
+            count,
+        } => {
+            let matching: Vec<Extension> = extensions
+                .into_iter()
+                .filter(|extension| {
+                    // Early return None if the extension is not a match.
+                    // Check if the extension has the same manifest type as the provided manifest type.
+
+                    match &manifest {
+                        Some(BasicManifestType::Json) => {
+                            if let ExtensionMetadata::TomlManifest(_) = extension.metadata {
+                                return false;
+                            };
+                        }
+                        Some(BasicManifestType::Toml) => {
+                            if let ExtensionMetadata::JsonManifest(_) = extension.metadata {
+                                return false;
+                            };
+                        }
+                        None => {}
+                    };
+
+                    // Check if the extension has the same type as the provided type.
+                    match &r#type {
+                        Some(extension_type) => match extension_type {
+                            BasicExtensionType::Theme => {
+                                if !matches!(extension.r#type, ExtensionType::Theme(_)) {
+                                    return false;
+                                }
+                            }
+                            BasicExtensionType::Language => {
+                                if !matches!(extension.r#type, ExtensionType::Language(_)) {
+                                    return false;
+                                }
+                            }
+                            BasicExtensionType::SlashCommand => {
+                                if !matches!(extension.r#type, ExtensionType::SlashCommand) {
+                                    return false;
+                                }
+                            }
+                            BasicExtensionType::ContextServer => {
+                                if !matches!(extension.r#type, ExtensionType::ContextServer) {
+                                    return false;
+                                }
+                            }
+                        },
+                        None => {}
+                    };
+
+                    // Check if the extension has the same git provider as the provided git provider.
+                    if let Some(provider) = &git_provider {
+                        if extension.git_provider.as_deref() != Some(provider) {
+                            return false;
+                        }
+                    }
+
+                    // Check if the extension has the same theme schema as the provided theme schema.
+                    // This is a bit more complex because the theme schema is nested.
+                    if let Some(schema) = &theme_schema {
+                        if let ExtensionType::Theme(theme_extension) = &extension.r#type {
+                            if theme_extension.themes.iter().any(|theme| match theme {
+                                Some(Theme::V1(Some(_))) => matches!(schema, BasicThemeSchema::V1),
+                                Some(Theme::V2(Some(_))) => matches!(schema, BasicThemeSchema::V2),
+                                _ => false,
+                            }) {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    }
+
+                    true
+                })
+                .collect();
+
+            println!("{}", count_or_list(matching, count));
+        }
     }
 
     Ok(())
 }
 
-fn count_or_list<T: ToString>(iter: impl Iterator<Item = T>, count: bool) -> String {
+fn count_or_list<T: ToString>(items: Vec<T>, count: bool) -> String {
     if count {
-        iter.count().to_string()
+        items.len().to_string()
     } else {
-        iter.map(|item| item.to_string())
+        items
+            .into_iter()
+            .map(|item| item.to_string())
             .collect::<Vec<String>>()
             .join("\n")
     }
@@ -199,82 +307,6 @@ fn extract_capture_names(
     }
 
     Some(capture_names)
-}
-
-fn handle_count_category(category: &CountCategory, extensions: Vec<Extension>) {
-    match category {
-        CountCategory::ByType => {
-            let mut language_extension_count = 0;
-            let mut theme_extension_count = 0;
-            let mut slash_command_extension_count = 0;
-            let mut context_server_extension_count = 0;
-
-            for extension in extensions {
-                match extension.r#type {
-                    ExtensionType::Theme(_) => theme_extension_count += 1,
-                    ExtensionType::Language(_) => language_extension_count += 1,
-                    ExtensionType::SlashCommand => slash_command_extension_count += 1,
-                    ExtensionType::ContextServer => context_server_extension_count += 1,
-                }
-            }
-
-            println!(
-            "Theme Extensions: {theme_extension_count}\nLanguage Extensions: {language_extension_count}\nSlash Command Extensions: {slash_command_extension_count}\nContext Server Extensions: {context_server_extension_count}"
-        );
-        }
-        CountCategory::ByManifest => {
-            let mut toml_manifest_count = 0;
-            let mut json_manifest_count = 0;
-
-            for extension in extensions {
-                match extension.metadata {
-                    ExtensionMetadata::TomlManifest(_) => toml_manifest_count += 1,
-                    ExtensionMetadata::JsonManifest(_) => json_manifest_count += 1,
-                }
-            }
-
-            println!("TOML Manifest: {toml_manifest_count}\nJSON Manifest: {json_manifest_count}");
-        }
-        CountCategory::ByGitProvider => {
-            let mut by_git_provider: HashMap<String, usize> = HashMap::new();
-
-            for extension in extensions {
-                if !extension.builtin {
-                    *by_git_provider
-                        .entry(
-                            extension
-                                .git_provider
-                                .expect("non-builtin extensions should have a git_provider")
-                                .clone(),
-                        )
-                        .or_default() += 1;
-                }
-            }
-
-            for (provider, count) in &by_git_provider {
-                println!("{provider}: {count}");
-            }
-        }
-        CountCategory::ByThemeSchema => {
-            let mut v1_count = 0;
-            let mut v2_count = 0;
-            let mut invalid_count = 0;
-
-            for extension in extensions {
-                if let ExtensionType::Theme(theme_extension) = extension.r#type {
-                    for theme in theme_extension.themes {
-                        match theme {
-                            Some(Theme::V1(_)) => v1_count += 1,
-                            Some(Theme::V2(_)) => v2_count += 1,
-                            None => invalid_count += 1,
-                        }
-                    }
-                }
-            }
-
-            println!("V1: {v1_count}\nV2: {v2_count}\nInvalid: {invalid_count}");
-        }
-    }
 }
 
 fn handle_query(query: AnalysisQuery, extensions: Vec<Extension>) {
@@ -389,16 +421,17 @@ fn handle_query(query: AnalysisQuery, extensions: Vec<Extension>) {
             );
         }
         AnalysisQuery::LanguagesUsingCapture { capture, count } => {
-            let languages_using_capture =
-                captures_by_language
-                    .iter()
-                    .filter_map(|(language, captures)| {
-                        if captures.contains(&capture) {
-                            Some(language)
-                        } else {
-                            None
-                        }
-                    });
+            let languages_using_capture = captures_by_language
+                .iter()
+                .filter_map(|(language, captures)| {
+                    if captures.contains(&capture) {
+                        Some(language)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
             println!("{}", count_or_list(languages_using_capture, count));
         }
 

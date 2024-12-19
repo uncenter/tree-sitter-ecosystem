@@ -35,7 +35,13 @@ pub struct Extension {
     pub r#type: ExtensionType,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl ToString for Extension {
+    fn to_string(&self) -> String {
+        self.id.clone()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ExtensionType {
     Theme(ThemeExtension),
     Language(LanguageExtension),
@@ -106,13 +112,13 @@ pub struct SlashCommandEntry {
     pub requires_argument: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct ThemeExtension {
     pub themes: Vec<Option<Theme>>,
 }
 
 /// `themes/<theme>.json` file structure for a theme in a [`ThemeExtension`].
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Theme {
     V1(Option<themes_v1_schema::ThemeFamilyContent>),
     V2(Option<themes_v2_schema::ThemeFamilyContent>),
@@ -185,12 +191,12 @@ impl ThemeExtension {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct LanguageExtension {
     pub languages: Vec<Language>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Language {
     pub config: LanguageConfig,
     pub highlights_queries: Option<String>,
@@ -200,7 +206,7 @@ pub struct Language {
     pub brackets_queries: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LanguageConfig {
     pub name: String,
     pub grammar: String,
