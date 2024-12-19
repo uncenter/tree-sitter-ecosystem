@@ -28,6 +28,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    Show {
+        id: String,
+    },
     /// Find extensions matching certain criteria.
     Find {
         #[arg(long)]
@@ -41,6 +44,9 @@ pub enum Commands {
 
         #[arg(long)]
         theme_schema: Option<BasicThemeSchema>,
+
+        #[arg(long)]
+        builtin: Option<bool>,
 
         #[arg(long)]
         count: bool,
@@ -139,7 +145,6 @@ fn main() -> Result<()> {
 
     let cache_dir = user_dirs::cache_dir()?.join("ts-ecosystem-zeta");
     let extensions_scan_cache = cache_dir.join("extensions-scan-dump.json");
-    let extensions_scan_clone = cache_dir.join("extensions-clone");
 
     let cache_result = || -> Result<Vec<Extension>> {
         Ok(
@@ -151,11 +156,11 @@ fn main() -> Result<()> {
     };
 
     let (extensions, cache_hit) = if args.refresh {
-        (scan::extensions(&extensions_scan_clone)?, false)
+        (scan::extensions(&cache_dir)?, false)
     } else {
         match cache_result() {
             Ok(extensions) => (extensions, true),
-            Err(_) => (scan::extensions(&extensions_scan_clone)?, false),
+            Err(_) => (scan::extensions(&cache_dir)?, false),
         }
     };
 
@@ -173,14 +178,12 @@ fn main() -> Result<()> {
             r#type,
             git_provider,
             theme_schema,
+            builtin,
             count,
         } => {
             let matching: Vec<Extension> = extensions
                 .into_iter()
                 .filter(|extension| {
-                    // Early return None if the extension is not a match.
-                    // Check if the extension has the same manifest type as the provided manifest type.
-
                     match &manifest {
                         Some(BasicManifestType::Json) => {
                             if let ExtensionMetadata::TomlManifest(_) = extension.metadata {
@@ -245,11 +248,25 @@ fn main() -> Result<()> {
                         }
                     }
 
+                    if let Some(builtin) = builtin {
+                        if extension.builtin != builtin {
+                            return false;
+                        }
+                    }
+
                     true
                 })
                 .collect();
 
             println!("{}", count_or_list(matching, count));
+        }
+        Commands::Show { id } => {
+            let extension = extensions
+                .into_iter()
+                .find(|extension| extension.id == id)
+                .expect("extension not found");
+
+            println!("{}", serde_json_lenient::to_string_pretty(&extension)?);
         }
     }
 

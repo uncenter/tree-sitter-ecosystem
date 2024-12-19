@@ -10,18 +10,22 @@ use crate::types::{
     LanguageExtension, ThemeExtension, TomlManifest,
 };
 
-pub fn clone_extensions_repository(dir: &PathBuf) -> Result<Repository> {
-    let zed_extensions_repository = match Repository::open(dir) {
+pub fn clone_extensions_repository(dir: &PathBuf, url: &str) -> Result<Repository> {
+    let repository = match Repository::open(dir) {
         Ok(repo) => repo,
-        Err(_) => Repository::clone("https://github.com/zed-industries/extensions.git", dir)?,
+        Err(_) => Repository::clone(url, dir)?,
     };
-    debug!("opened zed extensions repository in {dir:?}");
+    debug!("opened {url} repository in {dir:?}");
 
-    Ok(zed_extensions_repository)
+    Ok(repository)
 }
 
-pub fn extensions(extensions_dir: &PathBuf) -> Result<Vec<Extension>> {
-    let extensions_repository = clone_extensions_repository(extensions_dir)?;
+pub fn extensions(cache_dir: &PathBuf) -> Result<Vec<Extension>> {
+    let extensions_dir = cache_dir.join("zed-industries/extensions");
+    let extensions_repository = clone_extensions_repository(
+        &extensions_dir,
+        "https://github.com/zed-industries/extensions.git",
+    )?;
 
     let extensions_metadata: ExtensionsMetadata =
         toml::from_str(&fs::read_to_string(extensions_dir.join("extensions.toml"))?)?;
@@ -38,6 +42,7 @@ pub fn extensions(extensions_dir: &PathBuf) -> Result<Vec<Extension>> {
             .join(&extension.submodule)
             .join(extension.path.clone().unwrap_or(String::new()));
 
+        let builtin = extension.submodule == "extensions/zed";
         let url = Url::parse(
             submodule
                 .url()
@@ -100,7 +105,7 @@ pub fn extensions(extensions_dir: &PathBuf) -> Result<Vec<Extension>> {
         extensions.push(Extension {
             id: id.clone(),
             metadata,
-            builtin: false,
+            builtin,
             git_provider: Some(url.host_str().unwrap().to_string()),
             r#type,
         });
